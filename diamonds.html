@@ -18,7 +18,8 @@
 			display: block;
 			margin: 16px auto 8px;
 			background: #000000;
-			image-rendering: pixelated;
+			max-width: 100%;   /* auf kleinen Bildschirmen verkleinert der Browser das fertige Bild */
+			height: auto;
 		}
 
 		.hinweis {
@@ -59,6 +60,7 @@
 		  - Stein toetet erst beim Aufprall auf das Spielerfeld und nur, wenn er in Bewegung ist
 		    (Boulder-Dash-Regel); vorher ein Feld zu frueh
 		  - Randpruefung beim Abrollen, Fehlermeldung bei fehlender levels.js
+		  - Feldgroesse passt sich dem Level an, Spielfeld zentriert; Canvas skaliert per CSS
 	-->
 	<script>
 	'use strict';
@@ -100,7 +102,10 @@
 	const context = canvas.getContext('2d');
 	const imagewidth = canvas.width;   // 800
 	const imageheight = canvas.height; // 500
-	const kantenlaenge = 30;           // Seitenlaenge eines Feldes in Pixeln
+	const statushoehe = 80;            // Hoehe der Statuszeile am unteren Rand
+	let kantenlaenge = 30;             // Seitenlaenge eines Feldes in Pixeln - wird je Level berechnet
+	let offx = 0;                      // Pixelversatz, um das Spielfeld zu zentrieren
+	let offy = 0;
 
 	// =====================================================================
 	//  Spielzustand
@@ -196,6 +201,12 @@
 		maxydim = 12;
 		xdim = levelx[solllevel];
 		ydim = levely[solllevel];
+
+		// Feldgroesse so waehlen, dass das Level den verfuegbaren Platz ausfuellt,
+		// und das Spielfeld zentrieren. (Vorher fest 30 px, kleine Level klebten links oben.)
+		kantenlaenge = Math.min(Math.floor(imagewidth / xdim), Math.floor((imageheight - statushoehe) / ydim));
+		offx = Math.floor((imagewidth - xdim * kantenlaenge) / 2);
+		offy = Math.floor((imageheight - statushoehe - ydim * kantenlaenge) / 2);
 
 		// Zunaechst alles mit Mauer fuellen (auch der Rand ausserhalb des Levels).
 		for (let i = 0; i < maxxdim * maxydim; i++)
@@ -549,13 +560,14 @@
 		context.fillRect(x, y, breite, hoehe);
 	}
 
-	/** Linie von (x1,y1) nach (x2,y2). */
+	/** Linie von (x1,y1) nach (x2,y2). Koordinaten werden auf Pixelmitte gelegt,
+	 *  damit 1-px-Linien scharf bleiben (die Feldgroesse ist nicht mehr durch 4 teilbar). */
 	function drawLine(x1, y1, x2, y2, r, g, b)
 	{
 		context.strokeStyle = farbe(r, g, b);
 		context.beginPath();
-		context.moveTo(x1, y1);
-		context.lineTo(x2, y2);
+		context.moveTo(Math.round(x1) + 0.5, Math.round(y1) + 0.5);
+		context.lineTo(Math.round(x2) + 0.5, Math.round(y2) + 0.5);
 		context.stroke();
 	}
 
@@ -588,7 +600,18 @@
 	 */
 	function showElement(element, x, y)
 	{
-		const kl = kantenlaenge; // Kantenlaenge eines Feldes in Pixeln
+		const kl = kantenlaenge;
+
+		// Alle Zeichenbefehle unten rechnen in Feldkoordinaten (x*kl, y*kl);
+		// der Versatz zum Zentrieren wird einmal hier angewendet.
+		context.save();
+		context.translate(offx, offy);
+		zeichneElement(element, x, y, kl);
+		context.restore();
+	}
+
+	function zeichneElement(element, x, y, kl)
+	{ // Kantenlaenge eines Feldes in Pixeln
 
 		// Hintergrund des Feldes schwarz vorbelegen.
 		bar(x * kl, y * kl, kl, kl, 0, 0, 0);
@@ -714,12 +737,12 @@
 		bar(0, imageheight - 80, imagewidth, 2, 0, 0, 0);
 
 		let s = "Diamanten " + diamantenzahl + " von " + diamantensollzahl;
-		graTextOut(kantenlaenge / 2, imageheight - 80 + 30, 20, s, 0, 0, 0);
-		graTextOut(kantenlaenge / 2 + 1, imageheight - 80 + 30, 20, s, 0, 0, 0);
+		graTextOut(15, imageheight - 80 + 30, 20, s, 0, 0, 0);
+		graTextOut(16, imageheight - 80 + 30, 20, s, 0, 0, 0);
 
 		s = "Level " + (istlevel + 1) + " von " + levelzahl;
-		graTextOut(kantenlaenge / 2, imageheight - 80 + 60, 20, s, 0, 0, 0);
-		graTextOut(kantenlaenge / 2 + 1, imageheight - 80 + 60, 20, s, 0, 0, 0);
+		graTextOut(15, imageheight - 80 + 60, 20, s, 0, 0, 0);
+		graTextOut(16, imageheight - 80 + 60, 20, s, 0, 0, 0);
 
 		// F1 = Neustart (doppelt gezeichnet fuer einen "fetten" Effekt)
 		graTextOut(imagewidth - 146, imageheight - 80 + 30, 16, "F1", 0, 0, 150);
@@ -730,11 +753,15 @@
 
 		graTextOut(10, imageheight - 10, 16, text, 0, 0, 0);
 
+		// Mitte des Spielfelds (fuer die Meldungen)
+		const mx = offx + xdim * kantenlaenge / 2;
+		const my = offy + ydim * kantenlaenge / 2;
+
 		// Gewonnen-Meldung.
 		if (steperg === true)
 		{
-			bar(xdim * kantenlaenge / 2 - 100, ydim * kantenlaenge / 2 - 40, 200, 80, 100, 80, 120);
-			graTextOut(xdim * kantenlaenge / 2 - 50, ydim * kantenlaenge / 2 + 5, 20, "Gewonnen", 255, 255, 255);
+			bar(mx - 100, my - 40, 200, 80, 100, 80, 120);
+			graTextOut(mx - 50, my + 5, 20, "Gewonnen", 255, 255, 255);
 
 			if (istlevel < levelzahl - 1)
 			{
@@ -749,8 +776,8 @@
 		// Verloren-Meldung nach dem Tod des Spielers.
 		if (killzaehler > 20)
 		{
-			bar(xdim * kantenlaenge / 2 - 100, ydim * kantenlaenge / 2 - 40, 200, 80, 100, 80, 120);
-			graTextOut(xdim * kantenlaenge / 2 - 50, ydim * kantenlaenge / 2 + 5, 20, "Verloren", 255, 255, 255);
+			bar(mx - 100, my - 40, 200, 80, 100, 80, 120);
+			graTextOut(mx - 50, my + 5, 20, "Verloren", 255, 255, 255);
 		}
 
 		// Nach laengerer Anzeige das Level automatisch neu starten.
@@ -776,10 +803,12 @@
 	{
 		if (paintwall === true)
 		{
-			// Kompletten Hintergrund einmalig mit Mauer fuellen.
+			// Kompletten Hintergrund einmalig mit Mauer fuellen - auch den Rand
+			// ausserhalb des (zentrierten) Levels, daher Feldindizes ab -1.
 			paintwall = false;
-			for (let j = 0; j < Math.floor((imageheight - 80) / kantenlaenge); j++)
-				for (let i = 0; i < Math.floor(imagewidth / kantenlaenge); i++)
+			const kl = kantenlaenge;
+			for (let j = -Math.ceil(offy / kl); j * kl + offy < imageheight - statushoehe; j++)
+				for (let i = -Math.ceil(offx / kl); i * kl + offx < imagewidth; i++)
 					showElement(MAUER, i, j);
 		}
 		else
