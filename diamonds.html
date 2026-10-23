@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Dajmonds</title>
+	<style>
+		html, body {
+			margin: 0;
+			padding: 0;
+			background: #202020;
+			color: #dddddd;
+			font-family: Georgia, "Times New Roman", serif;
+			text-align: center;
+		}
+
+		#spielfeld {
+			display: block;
+			margin: 16px auto 8px;
+			background: #000000;
+			image-rendering: pixelated;
+		}
+
+		.hinweis {
+			margin: 0 0 16px;
+			font-size: 14px;
+			color: #9aa;
+		}
+	</style>
+</head>
+<body>
+	<!-- Zeichenflaeche des Spiels (800 x 500 Pixel) -->
+	<canvas id="spielfeld" width="800" height="500"></canvas>
+
+	<p class="hinweis">
+		Dajmonds V0.6 &ndash; Pfeiltasten: bewegen &bull; F1: Neustart &bull;
+		F2: naechstes Level (nach Sieg) &bull; Bild&uarr;/Bild&darr;: Level waehlen &bull; Esc: Pause
+	</p>
+
+	<!-- Level-Daten: definiert die globale Zeichenkette "b" mit allen Spielfeldern -->
+	<script src="levels.js"></script>
+
+	<!--
+		Dajmonds - ein kleiner Boulder-Dash-Klon.
+		Ziel: mit dem Spieler ("Hombre") alle Diamanten einsammeln und den Ausgang
+		erreichen. Steine und Diamanten fallen der Schwerkraft folgend nach unten und
+		koennen den Spieler erschlagen. Steine lassen sich horizontal schieben.
+
+		Ueberarbeitet 2026: HTML5-Doctype, "use strict", const/let statt var,
+		strikte Vergleiche, moderne Event-/Renderschleife (requestAnimationFrame mit
+		festem Zeittakt) sowie durchgaengige Kommentierung. Die Spiellogik selbst
+		wurde inhaltlich unveraendert uebernommen.
+	-->
+	<script>
+	'use strict';
+
+	// =====================================================================
+	//  Konstanten
+	// =====================================================================
+
+	// Steuerbefehle / Bewegungsrichtungen (Ergebnis der Tastatureingabe)
+	const RAUF    = 1;
+	const RECHTS  = 2;
+	const RUNTER  = 3;
+	const LINKS   = 4;
+	const RESTART = 5; // aktuelles Level neu starten (F1)
+	const NEXT    = 6; // naechstes Level nach gewonnenem Level (F2)
+	const NEXT1   = 8; // Level vorwaerts blaettern (Bild auf)
+	const PREV1   = 9; // Level rueckwaerts blaettern (Bild ab)
+
+	// Feldtypen im Spielfeld-Array
+	const LEER     = 0;
+	const MAUER    = 1;
+	const STEIN    = 2;
+	const ERDE     = 3;
+	const DIAMANT  = 4;
+	const DIAMANTX = 5; // im Leveldesign markierter Diamant ("*"), sonst wie LEER behandelt
+	const EINGANG  = 6;
+	const AUSGANG  = 7;
+	const HOMBRE   = 8; // Spielfigur
+	const KILL     = 9; // Explosions-/Todesanimation
+
+	const TICK_MS = 50; // Dauer eines Spielschritts in Millisekunden (=> 20 Ticks/s)
+
+	// =====================================================================
+	//  Zeichenflaeche
+	// =====================================================================
+
+	const canvas = document.getElementById('spielfeld');
+	const context = canvas.getContext('2d');
+	const imagewidth = canvas.width;   // 800
+	const imageheight = canvas.height; // 500
+	const kantenlaenge = 30;           // Seitenlaenge eines Feldes in Pixeln
+
+	// =====================================================================
+	//  Spielzustand
+	// =====================================================================
+
+	// Spielfeld-Abmessungen. maxxdim/maxydim = Kapazitaet der Arrays,
+	// xdim/ydim = tatsaechliche Groesse des aktuellen Levels.
+	let maxxdim = 21;
+	let maxydim = 12;
+	let xdim = 10;
+	let ydim = 10;
+
+	let a = new Array(maxxdim * maxydim);    // aktuelles Spielfeld
+	let olda = new Array(maxxdim * maxydim); // Spielfeld des vorigen Frames (fuer partielles Neuzeichnen)
+
+	let xpos = 0, ypos = 0;         // Position des Spielers
+	let xkillpos = 0, ykillpos = 0; // Position der Todesanimation
+	let killzaehler = 0;            // Frames seit dem Tod des Spielers
+
+	let diamantenzahl = 0;      // bereits eingesammelte Diamanten
+	let diamantensollzahl = 5;  // zum Gewinnen benoetigte Diamanten
+
+	let steperg = false; // true => aktuelles Level gewonnen
+	let kill = 0;        // 1 => Spieler wurde erschlagen
+	let istlevel = 0;    // Index des aktuellen Levels
+	let levelzahl = 1;   // Anzahl vorhandener Level
+	let paintwall = true;// beim naechsten Frame Hintergrundmauer neu zeichnen
+	let showhide = false;// Pause/Ausblenden aktiv
+	let taste = 0;       // zuletzt gedrueckte Steuertaste
+	const text = " ";    // (Platzhaltertext in der Statuszeile)
+
+	// Level-Metadaten, beim Start aus der globalen Zeichenkette "b" (levels.js) gelesen.
+	const levelstart = []; // Startindex der Felddaten je Level
+	const levelx = [];     // Breite je Level
+	const levely = [];     // Hoehe je Level
+
+	// =====================================================================
+	//  Level laden
+	// =====================================================================
+
+	/**
+	 * Durchsucht die globale Level-Zeichenkette "b" (aus levels.js) nach den
+	 * Markern "DIMX<breite>DIMY<hoehe>" und merkt sich Startposition sowie
+	 * Abmessungen jedes Levels. Endet beim Marker "END".
+	 */
+	function analysiereLevel()
+	{
+		const b = window.b; // Zeichenkette aus levels.js
+
+		// Ende der Nutzdaten bestimmen (Marker "END").
+		const ende = b.indexOf('END');
+		const laenge = (ende !== -1) ? ende : b.length;
+
+		for (let i = 0; i < laenge; i++)
+		{
+			// Ein Level beginnt mit "DIMX###DIMY###".
+			if (b[i] === 'D' && b[i + 1] === 'I' && b[i + 2] === 'M' && b[i + 3] === 'X')
+			{
+				levelstart.push(i + 14);                       // Felddaten folgen nach dem 14 Zeichen langen Header
+				levelx.push(parseInt(b.substr(i + 4, 3), 10)); // Breite (3 Ziffern nach "DIMX")
+				levely.push(parseInt(b.substr(i + 11, 3), 10));// Hoehe  (3 Ziffern nach "DIMY")
+			}
+		}
+
+		levelzahl = levelstart.length;
+	}
+
+	/**
+	 * Baut das Spielfeld-Array fuer das angegebene Level auf und setzt den
+	 * kompletten Spielzustand (Spielerposition, Diamantenzahl usw.) zurueck.
+	 * @param {number} solllevel Index des zu ladenden Levels
+	 */
+	function ladeLevel(solllevel)
+	{
+		const b = window.b;
+
+		maxxdim = 21;
+		maxydim = 12;
+		xdim = levelx[solllevel];
+		ydim = levely[solllevel];
+
+		// Zunaechst alles mit Mauer fuellen (auch der Rand ausserhalb des Levels).
+		for (let i = 0; i < maxxdim * maxydim; i++)
+			a[i] = MAUER;
+
+		// Zeichen der Leveldefinition in Feldtypen uebersetzen.
+		for (let i = levelstart[solllevel]; i < levelstart[solllevel] + xdim * ydim; i++)
+		{
+			const h = i - levelstart[solllevel];
+			const x = h % xdim;
+			const y = Math.floor(h / xdim);
+
+			switch (b[i])
+			{
+				case '#': a[y * maxxdim + x] = MAUER;    break;
+				case ' ': a[y * maxxdim + x] = LEER;     break;
+				case 'S': a[y * maxxdim + x] = STEIN;    break;
+				case '-': a[y * maxxdim + x] = ERDE;     break;
+				case 'X': a[y * maxxdim + x] = DIAMANT;  break;
+				case '*': a[y * maxxdim + x] = DIAMANTX; break;
+				case 'I': a[y * maxxdim + x] = EINGANG;  break;
+				case 'O': a[y * maxxdim + x] = AUSGANG;  break;
+				default:  /* unbekannte Zeichen bleiben Mauer */ break;
+			}
+		}
+
+		diamantensollzahl = 0;
+		diamantenzahl = 0;
+
+		// Startposition (Eingang) suchen und Diamanten zaehlen.
+		for (let y = 0; y < ydim; y++)
+		{
+			for (let x = 0; x < xdim; x++)
+			{
+				if (a[x + maxxdim * y] === EINGANG)
+				{
+					xpos = x;
+					ypos = y;
+				}
+
+				if (a[x + maxxdim * y] === DIAMANT)
+					diamantensollzahl++;
+			}
+		}
+
+		// olda "ungueltig" setzen, damit im ersten Frame alles neu gezeichnet wird.
+		for (let x = 0; x < xdim; x++)
+			for (let y = 0; y < ydim; y++)
+				olda[x + maxxdim * y] = -42;
+
+		a[xpos + maxxdim * ypos] = HOMBRE;
+		kill = 0;
+		killzaehler = 0;
+		xkillpos = -1;
+		ykillpos = -1;
+		steperg = false;
+		paintwall = true;
+	}
+
+	// =====================================================================
+	//  Eingabe
+	// =====================================================================
+
+	/**
+	 * Tastatur-Handler. Uebersetzt gedrueckte Tasten in Steuerbefehle.
+	 * Nutzt das moderne KeyboardEvent.key statt des veralteten keyCode.
+	 * @param {KeyboardEvent} evt
+	 */
+	function onKeyDown(evt)
+	{
+		switch (evt.key)
+		{
+			case 'ArrowRight': taste = RECHTS; break;
+			case 'ArrowLeft':  taste = LINKS;  break;
+			case 'ArrowUp':    taste = RAUF;   break;
+			case 'ArrowDown':  taste = RUNTER; break;
+			case 'F1':         taste = RESTART; break; // Level neu starten
+			case 'F2':         taste = NEXT;    break; // naechstes Level (nach Sieg)
+			case 'PageUp':     taste = NEXT1;   break; // Level vorwaerts blaettern
+			case 'PageDown':   taste = PREV1;   break; // Level rueckwaerts blaettern
+			case 'Escape':                             // Pause umschalten
+				if (showhide)
+				{
+					showhide = false;
+					paintwall = true;
+					for (let x = 0; x < xdim; x++)
+						for (let y = 0; y < ydim; y++)
+							olda[x + maxxdim * y] = -42;
+				}
+				else
+				{
+					showhide = true;
+				}
+				break;
+			default:
+				return; // andere Tasten ignorieren (kein preventDefault)
+		}
+
+		evt.preventDefault(); // Standardaktion (Scrollen, F1-Hilfe ...) unterdruecken
+	}
+
+	// =====================================================================
+	//  Spiellogik
+	// =====================================================================
+
+	/**
+	 * Fuehrt einen Spielerzug bzw. Steuerbefehl aus.
+	 * @param {number} richtung einer der Steuer-/Richtungswerte
+	 * @returns {number|boolean} 1/true bei Levelgewinn, sonst 0
+	 */
+	function step(richtung)
+	{
+		let dx = 0;
+		let dy = 0;
+
+		// --- Level blaettern -------------------------------------------------
+		if (richtung === NEXT1 && istlevel < levelzahl - 1)
+		{
+			istlevel++;
+			ladeLevel(istlevel);
+			return 0;
+		}
+		if (richtung === PREV1 && istlevel > 0)
+		{
+			istlevel--;
+			ladeLevel(istlevel);
+			return 0;
+		}
+
+		// --- Nach Sieg ins naechste Level ------------------------------------
+		if (richtung === NEXT && steperg === true)
+		{
+			if (istlevel < levelzahl - 1)
+			{
+				istlevel++;
+				ladeLevel(istlevel);
+			}
+			return 0;
+		}
+
+		// --- Neustart --------------------------------------------------------
+		if (richtung === RESTART)
+		{
+			ladeLevel(istlevel);
+			return 0;
+		}
+
+		// Ist das Level bereits gewonnen, keine Bewegung mehr zulassen.
+		if (steperg === true)
+			return true;
+
+		// --- Bewegungsvektor bestimmen --------------------------------------
+		if (richtung === RAUF)   { dx =  0; dy = -1; }
+		if (richtung === RECHTS) { dx =  1; dy =  0; }
+		if (richtung === RUNTER) { dx =  0; dy =  1; }
+		if (richtung === LINKS)  { dx = -1; dy =  0; }
+
+		// Rand des Spielfelds nicht verlassen.
+		if (xpos + dx < 0 || xpos + dx >= xdim || ypos + dy < 0 || ypos + dy >= ydim)
+			return 0;
+
+		const ziel = a[xpos + dx + maxxdim * (ypos + dy)];
+
+		// Gegen eine Mauer laufen: nichts passiert.
+		if (ziel === MAUER)
+			return 0;
+
+		// In Leerraum, Erde oder Eingang laufen.
+		if (ziel === LEER || ziel === ERDE || ziel === EINGANG)
+		{
+			a[xpos + maxxdim * ypos] = LEER;
+			xpos += dx; ypos += dy;
+			a[xpos + maxxdim * ypos] = HOMBRE;
+			return 0;
+		}
+
+		// In den Ausgang laufen (Sieg, falls genug Diamanten gesammelt wurden).
+		if (ziel === AUSGANG)
+		{
+			a[xpos + maxxdim * ypos] = LEER;
+			xpos += dx; ypos += dy;
+			a[xpos + maxxdim * ypos] = HOMBRE;
+			// Sieg als Boolean zurueckgeben (steperg wird strikt mit true verglichen).
+			return diamantenzahl >= diamantensollzahl;
+		}
+
+		// Diamant einsammeln.
+		if (ziel === DIAMANT)
+		{
+			diamantenzahl++;
+			a[xpos + dx + maxxdim * (ypos + dy)] = MAUER;
+			a[xpos + maxxdim * ypos] = LEER;
+			xpos += dx; ypos += dy;
+			a[xpos + maxxdim * ypos] = HOMBRE;
+
+			// Sind jetzt alle Diamanten beisammen, Ausgang neu zeichnen (wird gruen).
+			if (diamantenzahl === diamantensollzahl)
+			{
+				for (let x = 0; x < xdim; x++)
+					for (let y = 0; y < ydim; y++)
+						if (a[x + maxxdim * y] === AUSGANG)
+							olda[x + maxxdim * y] = -42;
+			}
+
+			return 0;
+		}
+
+		// Stein schieben (nur horizontal moeglich).
+		if (ziel === STEIN)
+		{
+			if (dx === 0)
+				return 0; // Steine lassen sich nicht senkrecht schieben
+
+			if (dx === -1)
+			{
+				if (xpos + dx - 1 < 0)                          // Spieler am linken Rand
+					return 0;
+				if (a[xpos + dx - 1 + maxxdim * ypos] !== LEER) // hinter dem Stein ist nicht frei
+					return 0;
+			}
+			if (dx === 1)
+			{
+				if (xpos + dx + 1 >= xdim)                      // Spieler am rechten Rand
+					return 0;
+				if (a[xpos + dx + 1 + maxxdim * ypos] !== LEER) // hinter dem Stein ist nicht frei
+					return 0;
+			}
+
+			if (dx === -1)
+				a[xpos + dx - 1 + maxxdim * ypos] = STEIN; // Stein nach links schieben
+			if (dx === 1)
+				a[xpos + dx + 1 + maxxdim * ypos] = STEIN; // Stein nach rechts schieben
+
+			a[xpos + dx + maxxdim * ypos] = MAUER; // alte Steinposition kurz sperren
+			a[xpos + maxxdim * ypos] = LEER;
+			xpos += dx; ypos += dy;
+			a[xpos + maxxdim * ypos] = HOMBRE;
+			return 0;
+		}
+
+		return 0;
+	}
+
+	/**
+	 * Ein Schwerkraft-Schritt: laesst alle Steine und Diamanten um ein Feld
+	 * fallen bzw. seitlich abrollen. Trifft ein fallendes Objekt den Spieler,
+	 * wird dieser getoetet.
+	 * @returns {number} 1, falls sich etwas bewegt hat, sonst 0
+	 */
+	function matrixstep()
+	{
+		let move = 0;
+		let richtung = 0;
+
+		// Von unten nach oben durchlaufen, damit Objekte pro Tick nur ein Feld fallen.
+		for (let y = ydim - 2; y > -1; y--)
+		{
+			for (let x = 0; x < xdim; x++)
+			{
+				if (a[x + maxxdim * y] === STEIN || a[x + maxxdim * y] === DIAMANT)
+				{
+					// Feld direkt darunter ist frei => fallen.
+					if (a[x + maxxdim * (y + 1)] === LEER)
+					{
+						if (x === xpos && y + 2 === ypos) // faellt dem Spieler auf den Kopf
+						{
+							a[x + maxxdim * (y + 1)] = a[x + maxxdim * y];
+							a[x + maxxdim * y] = LEER;
+							a[x + maxxdim * (y + 2)] = LEER;
+							xpos = -10;
+							ypos = -10;
+							xkillpos = x;
+							ykillpos = y + 2;
+							kill = 1;
+						}
+						else
+						{
+							a[x + maxxdim * (y + 1)] = a[x + maxxdim * y];
+							a[x + maxxdim * y] = LEER;
+						}
+						move = 1;
+					}
+
+					// Feld darunter ist selbst Stein/Diamant => ggf. seitlich abrollen.
+					if (a[x + maxxdim * (y + 1)] === STEIN || a[x + maxxdim * (y + 1)] === DIAMANT)
+					{
+						const rechtsFrei = (a[x + 1 + maxxdim * (y + 1)] === LEER) && (a[x + 1 + maxxdim * y] === LEER);
+						const linksFrei  = (a[x - 1 + maxxdim * (y + 1)] === LEER) && (a[x - 1 + maxxdim * y] === LEER);
+
+						if (rechtsFrei || linksFrei)
+						{
+							if (rechtsFrei && linksFrei)
+								richtung = Math.round((Math.random() * 2) * 2) - 1; // zufaellig -1 oder 1
+							else
+								richtung = rechtsFrei ? 1 : -1;
+
+							a[x + richtung + maxxdim * (y + 1)] = a[x + maxxdim * y];
+							a[x + maxxdim * y] = LEER;
+							move = 1;
+						}
+					}
+				}
+			}
+		}
+
+		return move;
+	}
+
+	// =====================================================================
+	//  Zeichen-Hilfsfunktionen
+	// =====================================================================
+
+	/** Erzeugt einen CSS-Farbstring aus RGB-Komponenten (0..255). */
+	const farbe = (r, g, b) => `rgb(${r},${g},${b})`;
+
+	/** Gefuelltes Rechteck. */
+	function bar(x, y, breite, hoehe, r, g, b)
+	{
+		context.fillStyle = farbe(r, g, b);
+		context.fillRect(x, y, breite, hoehe);
+	}
+
+	/** Linie von (x1,y1) nach (x2,y2). */
+	function drawLine(x1, y1, x2, y2, r, g, b)
+	{
+		context.strokeStyle = farbe(r, g, b);
+		context.beginPath();
+		context.moveTo(x1, y1);
+		context.lineTo(x2, y2);
+		context.stroke();
+	}
+
+	/** Gefuellt wirkender Kreis (mehrere konzentrische Kreise). */
+	function circle(x, y, radius, r, g, b)
+	{
+		context.strokeStyle = farbe(r, g, b);
+		context.beginPath();
+		for (let i = 1; i <= radius; i++)
+			context.arc(x, y, i, 0, 2 * Math.PI);
+		context.stroke();
+	}
+
+	/** Textausgabe an Position (x,y). */
+	function graTextOut(x, y, size, textAusgabe, r, g, b)
+	{
+		context.fillStyle = farbe(r, g, b);
+		context.font = size + 'px Georgia';
+		context.fillText(textAusgabe, x, y);
+	}
+
+	// =====================================================================
+	//  Darstellung
+	// =====================================================================
+
+	/**
+	 * Zeichnet ein einzelnes Feldelement an der Rasterposition (x, y).
+	 * @param {number} element Feldtyp (MAUER, STEIN, ...)
+	 * @param {number} x Rasterspalte
+	 * @param {number} y Rasterzeile
+	 */
+	function showElement(element, x, y)
+	{
+		// Im Pausemodus das gesamte Spielfeld weiss ueberdecken.
+		if (showhide === true)
+		{
+			bar(0, 0, imagewidth, imageheight, 255, 255, 255);
+			return;
+		}
+
+		const kl = kantenlaenge; // Kantenlaenge eines Feldes in Pixeln
+
+		// Hintergrund des Feldes schwarz vorbelegen.
+		bar(x * kl, y * kl, kl, kl, 0, 0, 0);
+
+		if (element === MAUER)
+		{
+			bar(x * kl, y * kl, kl, kl, 150, 50, 50);
+
+			// waagerechte Fugen
+			drawLine(x * kl, y * kl + kl * 0 / 4, x * kl + kl, y * kl + kl * 0 / 4, 0, 0, 0);
+			drawLine(x * kl, y * kl + kl * 1 / 4, x * kl + kl, y * kl + kl * 1 / 4, 0, 0, 0);
+			drawLine(x * kl, y * kl + kl * 2 / 4, x * kl + kl, y * kl + kl * 2 / 4, 0, 0, 0);
+			drawLine(x * kl, y * kl + kl * 3 / 4, x * kl + kl, y * kl + kl * 3 / 4, 0, 0, 0);
+			drawLine(x * kl, y * kl + kl * 4 / 4, x * kl + kl, y * kl + kl * 4 / 4, 0, 0, 0);
+
+			// versetzte senkrechte Fugen (Ziegelmuster)
+			drawLine(x * kl + kl * 2 / 4, y * kl + kl * 0 / 4, x * kl + kl * 2 / 4, y * kl + kl * 1 / 4, 0, 0, 0);
+
+			drawLine(x * kl + kl * 1 / 4, y * kl + kl * 1 / 4, x * kl + kl * 1 / 4, y * kl + kl * 2 / 4, 0, 0, 0);
+			drawLine(x * kl + kl * 3 / 4, y * kl + kl * 1 / 4, x * kl + kl * 3 / 4, y * kl + kl * 2 / 4, 0, 0, 0);
+
+			drawLine(x * kl + kl * 2 / 4, y * kl + kl * 2 / 4, x * kl + kl * 2 / 4, y * kl + kl * 3 / 4, 0, 0, 0);
+
+			drawLine(x * kl + kl * 1 / 4, y * kl + kl * 3 / 4, x * kl + kl * 1 / 4, y * kl + kl * 4 / 4, 0, 0, 0);
+			drawLine(x * kl + kl * 3 / 4, y * kl + kl * 3 / 4, x * kl + kl * 3 / 4, y * kl + kl * 4 / 4, 0, 0, 0);
+
+			drawLine(x * kl, y * kl, x * kl, y * kl + kl * 1 / 4, 0, 0, 0);
+			drawLine(x * kl, y * kl + kl * 2 / 4, x * kl, y * kl + kl * 3 / 4, 0, 0, 0);
+		}
+
+		if (element === STEIN)
+		{
+			circle(x * kl + kl / 2 - 1, y * kl + kl / 2 - 1, Math.round(kl * 0.4), 180, 180, 140);
+		}
+
+		if (element === DIAMANT)
+		{
+			// Zufaelliger Blauton fuer ein leichtes Funkeln.
+			const r = Math.round(Math.random() * 155);
+
+			for (let i = kl / 10; i <= kl - kl / 10; i++)
+			{
+				drawLine(x * kl + i, y * kl + kl * 2 / 4, x * kl + kl / 2, y * kl + kl / 10, 50 + r, 50 + r, 255);
+				drawLine(x * kl + i, y * kl + kl * 2 / 4, x * kl + kl / 2, y * kl + kl - kl / 10, 50 + r, 50 + r, 255);
+			}
+		}
+
+		if (element === ERDE)
+		{
+			// Erde als koerniges Punktmuster.
+			let z = 0;
+			for (let i = 0; i < 10; i++)
+			{
+				for (let j = 0; j < 10; j++)
+				{
+					z++;
+					if (z % 3 > 0)
+					{
+						if (kl / 10 > 2)
+							bar(x * kl + Math.round(i * kl / 10), y * kl + Math.round(j * kl / 10), kl / 10 - 2, kl / 10 - 2, 50, 130, 50);
+						else
+							bar(x * kl + Math.round(i * kl / 10), y * kl + Math.round(j * kl / 10), 1, 1, 50, 130, 50);
+					}
+				}
+			}
+		}
+
+		if (element === LEER)
+		{
+			bar(x * kl, y * kl, kl, kl, 0, 0, 0);
+		}
+
+		if (element === AUSGANG)
+		{
+			if (diamantenzahl >= diamantensollzahl) // gruen = offen
+			{
+				bar(x * kl + 5, y * kl + kl / 2, kl - 10, kl / 2 - 5, 100, 255, 100);
+				for (let i = 0; i < kl - 10; i++)
+					drawLine(x * kl + 5 + i, y * kl + kl / 2, x * kl + kl / 2, y * kl + 5, 100, 255, 100);
+			}
+			else // grau = noch verschlossen
+			{
+				bar(x * kl + 5, y * kl + kl / 2, kl - 10, kl / 2 - 5, 100, 100, 100);
+				for (let i = 0; i < kl - 10; i++)
+					drawLine(x * kl + 5 + i, y * kl + kl / 2, x * kl + kl / 2, y * kl + 5, 100, 100, 100);
+			}
+		}
+
+		if (element === HOMBRE)
+		{
+			// Spielfigur als "X".
+			drawLine(x * kl + 5, y * kl + 5, x * kl + kl - 5, y * kl + kl - 5, 200, 200, 100);
+			drawLine(x * kl + 6, y * kl + 5, x * kl + kl - 4, y * kl + kl - 5, 200, 200, 100);
+			drawLine(x * kl + 5, y * kl + 6, x * kl + kl - 5, y * kl + kl - 4, 200, 200, 100);
+
+			drawLine(x * kl + 5, y * kl + kl - 5, x * kl + kl - 5, y * kl + 5, 200, 200, 100);
+			drawLine(x * kl + 5, y * kl + kl - 6, x * kl + kl - 6, y * kl + 5, 200, 200, 100);
+			drawLine(x * kl + 6, y * kl + kl - 5, x * kl + kl - 5, y * kl + 6, 200, 200, 100);
+		}
+
+		if (element === KILL)
+		{
+			// Bunte, zufaellige Explosion.
+			const r = Math.round(Math.random() * kl * 1.5);
+			const rc = Math.round(Math.random() * 255);
+			const gc = Math.round(Math.random() * 255);
+			const bc = Math.round(Math.random() * 255);
+
+			circle(x * kl + kl / 2, y * kl + kl / 2, r, rc, gc, bc);
+		}
+	}
+
+	/**
+	 * Zeichnet die Statuszeile am unteren Rand sowie Gewonnen/Verloren-Meldungen.
+	 * Startet das Level nach laengerer Verloren-Anzeige automatisch neu.
+	 */
+	function showSteuerung()
+	{
+		if (showhide === true)
+			return;
+
+		bar(0, imageheight - 80, imagewidth, 80, 120, 140, 120);
+		bar(0, imageheight - 80, imagewidth, 2, 0, 0, 0);
+
+		let s = "Diamanten " + diamantenzahl + " von " + diamantensollzahl;
+		graTextOut(kantenlaenge / 2, imageheight - 80 + 30, 20, s, 0, 0, 0);
+		graTextOut(kantenlaenge / 2 + 1, imageheight - 80 + 30, 20, s, 0, 0, 0);
+
+		s = "Level " + (istlevel + 1) + " von " + levelzahl;
+		graTextOut(kantenlaenge / 2, imageheight - 80 + 60, 20, s, 0, 0, 0);
+		graTextOut(kantenlaenge / 2 + 1, imageheight - 80 + 60, 20, s, 0, 0, 0);
+
+		// F1 = Neustart (doppelt gezeichnet fuer einen "fetten" Effekt)
+		graTextOut(imagewidth - 146, imageheight - 80 + 30, 16, "F1", 0, 0, 150);
+		graTextOut(imagewidth - 147, imageheight - 80 + 30, 16, "F1", 0, 0, 150);
+
+		graTextOut(imagewidth - 120, imageheight - 80 + 30, 16, "restart", 0, 0, 0);
+		graTextOut(imagewidth - 121, imageheight - 80 + 30, 16, "restart", 0, 0, 0);
+
+		graTextOut(10, imageheight - 10, 16, text, 0, 0, 0);
+
+		// Gewonnen-Meldung.
+		if (steperg === true)
+		{
+			bar(xdim * kantenlaenge / 2 - 100, ydim * kantenlaenge / 2 - 40, 200, 80, 100, 80, 120);
+			graTextOut(xdim * kantenlaenge / 2 - 50, ydim * kantenlaenge / 2 + 5, 20, "Gewonnen", 255, 255, 255);
+
+			if (istlevel < levelzahl - 1)
+			{
+				graTextOut(imagewidth - 148, imageheight - 80 + 65, 16, "F2", 0, 0, 0);
+				graTextOut(imagewidth - 149, imageheight - 80 + 65, 16, "F2", 0, 0, 0);
+
+				graTextOut(imagewidth - 120, imageheight - 80 + 65, 16, "next Level", 0, 0, 0);
+				graTextOut(imagewidth - 121, imageheight - 80 + 65, 16, "next Level", 0, 0, 0);
+			}
+		}
+
+		// Verloren-Meldung nach dem Tod des Spielers.
+		if (killzaehler > 20)
+		{
+			bar(xdim * kantenlaenge / 2 - 100, ydim * kantenlaenge / 2 - 40, 200, 80, 100, 80, 120);
+			graTextOut(xdim * kantenlaenge / 2 - 50, ydim * kantenlaenge / 2 + 5, 20, "Verloren", 255, 255, 255);
+		}
+
+		// Nach laengerer Anzeige das Level automatisch neu starten.
+		if (killzaehler > 80)
+		{
+			for (let i = 0; i < maxxdim * maxydim; i++)
+				a[i] = MAUER;
+
+			ladeLevel(istlevel);
+
+			for (let x = 0; x < xdim; x++)
+				for (let y = 0; y < ydim; y++)
+					olda[x + maxxdim * y] = -42;
+		}
+	}
+
+	/**
+	 * Zeichnet das gesamte Spielfeld. Beim ersten Aufruf wird die
+	 * Hintergrundmauer komplett gezeichnet, danach nur die geaenderten Felder
+	 * (Vergleich a[] gegen olda[]), was das Neuzeichnen deutlich beschleunigt.
+	 */
+	function showWelt()
+	{
+		if (paintwall === true)
+		{
+			// Kompletten Hintergrund einmalig mit Mauer fuellen.
+			paintwall = false;
+			for (let j = 0; j < Math.floor((imageheight - 80) / kantenlaenge); j++)
+				for (let i = 0; i < Math.floor(imagewidth / kantenlaenge); i++)
+					showElement(MAUER, i, j);
+		}
+		else
+		{
+			// Nur veraenderte Felder (und Diamanten wegen des Funkelns) neu zeichnen.
+			for (let x = 0; x < xdim; x++)
+				for (let y = 0; y < ydim; y++)
+					if (olda[x + maxxdim * y] !== a[x + maxxdim * y] || a[x + maxxdim * y] === DIAMANT)
+						showElement(a[x + maxxdim * y], x, y);
+
+			// Aktuellen Zustand als Vergleichsbasis fuer den naechsten Frame merken.
+			for (let x = 0; x < xdim; x++)
+				for (let y = 0; y < ydim; y++)
+					olda[x + maxxdim * y] = a[x + maxxdim * y];
+
+			showSteuerung();
+
+			// Todesanimation zeichnen, solange der Spieler "weg" ist.
+			if ((xpos < 0 || ypos < 0) && killzaehler < 20)
+				showElement(KILL, xkillpos, ykillpos);
+		}
+	}
+
+	// =====================================================================
+	//  Spielschleife und Start
+	// =====================================================================
+
+	/** Ein Spielschritt: Eingabe verarbeiten, Schwerkraft anwenden, Tod zaehlen. */
+	function go()
+	{
+		showWelt();
+
+		if (kill === 0)
+		{
+			if (taste !== 0)
+			{
+				steperg = step(taste);
+				taste = 0;
+			}
+		}
+
+		matrixstep();
+
+		if (kill === 1)
+			killzaehler++;
+	}
+
+	// Zeitsteuerung: requestAnimationFrame liefert ein fluessiges Rendering,
+	// waehrend ein Akkumulator die Spiellogik mit festem Takt (TICK_MS) haelt,
+	// damit die Spielgeschwindigkeit unabhaengig von der Bildwiederholrate ist.
+	let letzteZeit = 0;
+	let akku = 0;
+
+	function schleife(zeit)
+	{
+		akku += zeit - letzteZeit;
+		letzteZeit = zeit;
+
+		// Grosse Zeitspruenge (z. B. inaktiver Tab) begrenzen, um Aufhol-Kaskaden zu vermeiden.
+		if (akku > 200)
+			akku = 200;
+
+		while (akku >= TICK_MS)
+		{
+			go();
+			akku -= TICK_MS;
+		}
+
+		requestAnimationFrame(schleife);
+	}
+
+	/** Initialisiert das Spiel und startet die Spielschleife. */
+	function start()
+	{
+		// Rahmen zeichnen.
+		context.fillStyle = '#000000';
+		context.fillRect(0, 0, canvas.width, canvas.height);
+		context.fillStyle = '#333333';
+		context.fillRect(2, 2, canvas.width - 4, canvas.height - 4);
+
+		for (let i = 0; i < maxxdim * maxydim; i++)
+			a[i] = MAUER;
+
+		analysiereLevel();
+		ladeLevel(istlevel);
+
+		for (let x = 0; x < xdim; x++)
+			for (let y = 0; y < ydim; y++)
+				olda[x + maxxdim * y] = -42;
+
+		document.addEventListener('keydown', onKeyDown);
+
+		letzteZeit = performance.now();
+		requestAnimationFrame(schleife);
+	}
+
+	start(); // Spiel starten
+	</script>
+</body>
+</html>
