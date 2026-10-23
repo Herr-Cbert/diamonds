@@ -50,6 +50,15 @@
 		strikte Vergleiche, moderne Event-/Renderschleife (requestAnimationFrame mit
 		festem Zeittakt) sowie durchgaengige Kommentierung. Die Spiellogik selbst
 		wurde inhaltlich unveraendert uebernommen.
+
+		Review 2026-10-23 (Logikfehler behoben):
+		  - Abrollrichtung: Zufallsformel lieferte -1..3 statt +-1 (Steine sprangen/verschwanden)
+		  - verschlossener Ausgang konnte betreten werden und war danach zerstoert
+		  - Pause (Esc) haelt jetzt wirklich an; vorher lief die Physik unsichtbar weiter
+		  - nach dem Sieg steht die Welt still (kein Tod mehr im Ausgang)
+		  - Stein toetet erst beim Aufprall auf das Spielerfeld und nur, wenn er in Bewegung ist
+		    (Boulder-Dash-Regel); vorher ein Feld zu frueh
+		  - Randpruefung beim Abrollen, Fehlermeldung bei fehlender levels.js
 	-->
 	<script>
 	'use strict';
@@ -74,7 +83,8 @@
 	const STEIN    = 2;
 	const ERDE     = 3;
 	const DIAMANT  = 4;
-	const DIAMANTX = 5; // im Leveldesign markierter Diamant ("*"), sonst wie LEER behandelt
+	const DIAMANTX = 5; // Levelzeichen "*": wird weder gezaehlt noch gezeichnet und wirkt fuer
+	                    // Spieler und Steine wie eine unsichtbare Mauer. In keinem Level benutzt.
 	const EINGANG  = 6;
 	const AUSGANG  = 7;
 	const HOMBRE   = 8; // Spielfigur
@@ -105,6 +115,7 @@
 
 	let a = new Array(maxxdim * maxydim);    // aktuelles Spielfeld
 	let olda = new Array(maxxdim * maxydim); // Spielfeld des vorigen Frames (fuer partielles Neuzeichnen)
+	let faellt = new Array(maxxdim * maxydim); // true = Stein/Diamant auf diesem Feld ist im letzten Tick gefallen
 
 	let xpos = 0, ypos = 0;         // Position des Spielers
 	let xkillpos = 0, ykillpos = 0; // Position der Todesanimation
@@ -140,6 +151,14 @@
 	{
 		const b = window.b; // Zeichenkette aus levels.js
 
+		// Fehlt levels.js (Pfad, Tippfehler, Hosting), gab es bisher nur einen kryptischen
+		// Fehler in der Konsole und ein schwarzes Canvas.
+		if (typeof b !== 'string')
+		{
+			graTextOut(20, 40, 20, "Fehler: levels.js nicht gefunden oder fehlerhaft.", 255, 80, 80);
+			throw new Error("levels.js fehlt");
+		}
+
 		// Ende der Nutzdaten bestimmen (Marker "END").
 		const ende = b.indexOf('END');
 		const laenge = (ende !== -1) ? ende : b.length;
@@ -156,6 +175,12 @@
 		}
 
 		levelzahl = levelstart.length;
+
+		if (levelzahl === 0)
+		{
+			graTextOut(20, 40, 20, "Fehler: keine Level in levels.js gefunden.", 255, 80, 80);
+			throw new Error("keine Level");
+		}
 	}
 
 	/**
@@ -174,7 +199,10 @@
 
 		// Zunaechst alles mit Mauer fuellen (auch der Rand ausserhalb des Levels).
 		for (let i = 0; i < maxxdim * maxydim; i++)
+		{
 			a[i] = MAUER;
+			faellt[i] = false;
+		}
 
 		// Zeichen der Leveldefinition in Feldtypen uebersetzen.
 		for (let i = levelstart[solllevel]; i < levelstart[solllevel] + xdim * ydim; i++)
@@ -263,6 +291,10 @@
 				else
 				{
 					showhide = true;
+					// Vorhang sofort zeichnen. Vorher geschah das nur nebenbei beim Neuzeichnen
+					// eines Diamanten - waren alle eingesammelt, blieb das Spielfeld sichtbar.
+					bar(0, 0, imagewidth, imageheight, 255, 255, 255);
+					graTextOut(imagewidth / 2 - 40, imageheight / 2, 24, "Pause", 0, 0, 0);
 				}
 				break;
 			default:
@@ -347,14 +379,18 @@
 			return 0;
 		}
 
-		// In den Ausgang laufen (Sieg, falls genug Diamanten gesammelt wurden).
+		// In den Ausgang laufen: nur moeglich, wenn er offen ist (genug Diamanten).
+		// Vorher konnte man auch den verschlossenen Ausgang betreten - er wurde dabei
+		// durch HOMBRE/LEER ersetzt und war damit weg, das Level nur noch per F1 loesbar.
 		if (ziel === AUSGANG)
 		{
+			if (diamantenzahl < diamantensollzahl)
+				return 0; // verschlossen: verhaelt sich wie eine Mauer
+
 			a[xpos + maxxdim * ypos] = LEER;
 			xpos += dx; ypos += dy;
 			a[xpos + maxxdim * ypos] = HOMBRE;
-			// Sieg als Boolean zurueckgeben (steperg wird strikt mit true verglichen).
-			return diamantenzahl >= diamantensollzahl;
+			return true; // Sieg (steperg wird strikt mit true verglichen)
 		}
 
 		// Diamant einsammeln.
@@ -416,8 +452,14 @@
 
 	/**
 	 * Ein Schwerkraft-Schritt: laesst alle Steine und Diamanten um ein Feld
-	 * fallen bzw. seitlich abrollen. Trifft ein fallendes Objekt den Spieler,
-	 * wird dieser getoetet.
+	 * fallen bzw. seitlich abrollen.
+	 *
+	 * Toedlich ist ein Objekt nur, wenn es bereits in Bewegung ist (faellt[] vom
+	 * vorigen Tick) und auf das Feld des Spielers faellt - wie im klassischen
+	 * Boulder Dash. Ein ruhender Stein direkt ueber dem Kopf ist ungefaehrlich,
+	 * man kann also unter Steinen hindurchgraben.
+	 * (Vorher starb der Spieler schon, wenn ein Stein zwei Felder ueber ihm ins
+	 *  Rollen kam, noch bevor er ihn erreicht hatte.)
 	 * @returns {number} 1, falls sich etwas bewegt hat, sonst 0
 	 */
 	function matrixstep()
@@ -430,45 +472,59 @@
 		{
 			for (let x = 0; x < xdim; x++)
 			{
-				if (a[x + maxxdim * y] === STEIN || a[x + maxxdim * y] === DIAMANT)
+				const hier  = x + maxxdim * y;
+				const unten = x + maxxdim * (y + 1);
+
+				if (a[hier] === STEIN || a[hier] === DIAMANT)
 				{
+					const warImFall = faellt[hier];
+					faellt[hier] = false; // wird unten neu gesetzt, falls das Objekt sich bewegt
+
 					// Feld direkt darunter ist frei => fallen.
-					if (a[x + maxxdim * (y + 1)] === LEER)
+					if (a[unten] === LEER)
 					{
-						if (x === xpos && y + 2 === ypos) // faellt dem Spieler auf den Kopf
-						{
-							a[x + maxxdim * (y + 1)] = a[x + maxxdim * y];
-							a[x + maxxdim * y] = LEER;
-							a[x + maxxdim * (y + 2)] = LEER;
-							xpos = -10;
-							ypos = -10;
-							xkillpos = x;
-							ykillpos = y + 2;
-							kill = 1;
-						}
-						else
-						{
-							a[x + maxxdim * (y + 1)] = a[x + maxxdim * y];
-							a[x + maxxdim * y] = LEER;
-						}
+						a[unten] = a[hier];
+						a[hier] = LEER;
+						faellt[unten] = true;
+						move = 1;
+					}
+
+					// Fallendes Objekt trifft den Spieler => Tod.
+					else if (a[unten] === HOMBRE && warImFall)
+					{
+						a[unten] = a[hier]; // Objekt landet auf dem Spielerfeld
+						a[hier] = LEER;
+						xkillpos = xpos;
+						ykillpos = ypos;
+						xpos = -10;
+						ypos = -10;
+						kill = 1;
 						move = 1;
 					}
 
 					// Feld darunter ist selbst Stein/Diamant => ggf. seitlich abrollen.
-					if (a[x + maxxdim * (y + 1)] === STEIN || a[x + maxxdim * (y + 1)] === DIAMANT)
+					else if (a[unten] === STEIN || a[unten] === DIAMANT)
 					{
-						const rechtsFrei = (a[x + 1 + maxxdim * (y + 1)] === LEER) && (a[x + 1 + maxxdim * y] === LEER);
-						const linksFrei  = (a[x - 1 + maxxdim * (y + 1)] === LEER) && (a[x - 1 + maxxdim * y] === LEER);
+						// Randpruefung: ohne sie wuerde bei x = 0 bzw. x = xdim-1 in die Nachbarzeile
+						// gegriffen (eindimensionales Array). Die Level haben zwar Randmauern,
+						// aber darauf sollte sich die Logik nicht verlassen.
+						const rechtsFrei = (x + 1 < xdim) && (a[x + 1 + maxxdim * (y + 1)] === LEER) && (a[x + 1 + maxxdim * y] === LEER);
+						const linksFrei  = (x - 1 >= 0)   && (a[x - 1 + maxxdim * (y + 1)] === LEER) && (a[x - 1 + maxxdim * y] === LEER);
 
 						if (rechtsFrei || linksFrei)
 						{
 							if (rechtsFrei && linksFrei)
-								richtung = Math.round((Math.random() * 2) * 2) - 1; // zufaellig -1 oder 1
+								richtung = (Math.random() < 0.5) ? -1 : 1; // zufaellig -1 oder 1
+							// Hinweis: die alte Formel Math.round(Math.random()*4)-1 lieferte
+							// -1, 0, 1, 2, 3 (nur in 25 % der Faelle ein gueltiges +-1). Bei 0 wurde
+							// das darunterliegende Objekt ueberschrieben (Stein -> Diamant oder umgekehrt),
+							// bei 2/3 sprang das Objekt zwei bzw. drei Felder weit - auch durch Mauern.
 							else
 								richtung = rechtsFrei ? 1 : -1;
 
-							a[x + richtung + maxxdim * (y + 1)] = a[x + maxxdim * y];
-							a[x + maxxdim * y] = LEER;
+							a[x + richtung + maxxdim * (y + 1)] = a[hier];
+							a[hier] = LEER;
+							faellt[x + richtung + maxxdim * (y + 1)] = true; // abgerollt = in Bewegung
 							move = 1;
 						}
 					}
@@ -503,14 +559,13 @@
 		context.stroke();
 	}
 
-	/** Gefuellt wirkender Kreis (mehrere konzentrische Kreise). */
+	/** Gefuellter Kreis. (Vorher: radius konzentrische Kreise in einem Pfad.) */
 	function circle(x, y, radius, r, g, b)
 	{
-		context.strokeStyle = farbe(r, g, b);
+		context.fillStyle = farbe(r, g, b);
 		context.beginPath();
-		for (let i = 1; i <= radius; i++)
-			context.arc(x, y, i, 0, 2 * Math.PI);
-		context.stroke();
+		context.arc(x, y, radius, 0, 2 * Math.PI);
+		context.fill();
 	}
 
 	/** Textausgabe an Position (x,y). */
@@ -533,13 +588,6 @@
 	 */
 	function showElement(element, x, y)
 	{
-		// Im Pausemodus das gesamte Spielfeld weiss ueberdecken.
-		if (showhide === true)
-		{
-			bar(0, 0, imagewidth, imageheight, 255, 255, 255);
-			return;
-		}
-
 		const kl = kantenlaenge; // Kantenlaenge eines Feldes in Pixeln
 
 		// Hintergrund des Feldes schwarz vorbelegen.
@@ -762,6 +810,14 @@
 	/** Ein Spielschritt: Eingabe verarbeiten, Schwerkraft anwenden, Tod zaehlen. */
 	function go()
 	{
+		// Pause: nichts bewegen. Vorher lief die Physik (und die Spielersteuerung)
+		// hinter dem weissen Vorhang weiter - "Pause" war nur ein Ausblenden.
+		if (showhide === true)
+		{
+			taste = 0;
+			return;
+		}
+
 		showWelt();
 
 		if (kill === 0)
@@ -773,7 +829,10 @@
 			}
 		}
 
-		matrixstep();
+		// Nach dem Sieg bleibt die Welt stehen. Sonst konnte ein nachrutschender
+		// Stein den Spieler im Ausgang noch erschlagen und der Sieg ging verloren.
+		if (steperg !== true)
+			matrixstep();
 
 		if (kill === 1)
 			killzaehler++;
