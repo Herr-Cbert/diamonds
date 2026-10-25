@@ -27,15 +27,173 @@
 			font-size: 14px;
 			color: #9aa;
 		}
+
+		/* ---- Touch-Steuerung (nur sichtbar, wenn <html> die Klasse "touch" traegt) ---- */
+
+		.touchsteuerung,
+		.hinweis-touch {
+			display: none;
+		}
+
+		.touch .hinweis-tastatur {
+			display: none;
+		}
+
+		.touch .hinweis-touch {
+			display: inline;
+		}
+
+		.touch body {
+			/* kein Markieren, kein Kontextmenue bei langem Druck (iOS) */
+			-webkit-user-select: none;
+			user-select: none;
+			-webkit-touch-callout: none;
+			-webkit-tap-highlight-color: transparent;
+		}
+
+		.touch #spiel {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			gap: 12px;
+			padding: 8px 8px 0;
+		}
+
+		.touch #spielfeld {
+			margin: 0;
+			touch-action: none; /* Wischen steuert die Figur statt die Seite zu scrollen */
+		}
+
+		.touch #steuerung {
+			display: flex;
+			align-items: center;
+			gap: 24px;
+		}
+
+		.touch .touchsteuerung {
+			display: grid;
+		}
+
+		/* Steuerkreuz: die Richtung ergibt sich aus der Fingerposition relativ zur Mitte,
+		   man kann also ohne Absetzen von einer Richtung in die andere rutschen. */
+		#steuerkreuz {
+			grid-template: repeat(3, 1fr) / repeat(3, 1fr);
+			width: 168px;
+			height: 168px;
+			touch-action: none;
+		}
+
+		#steuerkreuz div {
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			background: rgb(120, 140, 120);
+			color: #000;
+			font-size: 26px;
+			border-radius: 10px;
+			margin: 3px;
+		}
+
+		#steuerkreuz div.aktiv {
+			background: rgb(200, 200, 100);
+		}
+
+		#steuerkreuz .k-rauf   { grid-area: 1 / 2; }
+		#steuerkreuz .k-links  { grid-area: 2 / 1; }
+		#steuerkreuz .k-rechts { grid-area: 2 / 3; }
+		#steuerkreuz .k-runter { grid-area: 3 / 2; }
+
+		#knoepfe {
+			grid-template-columns: repeat(2, auto);
+			gap: 8px;
+		}
+
+		#knoepfe button {
+			font: 15px Georgia, "Times New Roman", serif;
+			min-width: 64px;
+			min-height: 44px;
+			padding: 4px 8px;
+			border: 0;
+			border-radius: 10px;
+			background: rgb(120, 140, 120);
+			color: #000;
+			touch-action: manipulation; /* kein Doppeltipp-Zoom */
+		}
+
+		#knoepfe button:active {
+			background: rgb(200, 200, 100);
+		}
+
+		#knoepfe button.bereit {
+			background: rgb(100, 255, 100);
+		}
+
+		/* Querformat: Steuerkreuz links, Knoepfe rechts, Spielfeld dazwischen so hoch wie moeglich. */
+		@media (orientation: landscape) {
+			.touch #spiel {
+				flex-direction: row;
+				justify-content: center;
+			}
+
+			.touch #steuerung {
+				display: contents; /* Kreuz und Knoepfe werden direkte Flex-Kinder von #spiel */
+			}
+
+			#steuerkreuz {
+				order: -1;
+				flex: none;
+			}
+
+			#knoepfe {
+				flex: none;
+				grid-template-columns: auto;
+			}
+
+			.touch .hinweis {
+				display: none; /* jeder Pixel Hoehe gehoert dem Spielfeld */
+			}
+
+			.touch #spielfeld {
+				min-width: 0;
+				max-height: calc(100vh - 16px);
+				max-height: calc(100dvh - 16px);
+			}
+		}
 	</style>
 </head>
 <body>
-	<!-- Zeichenflaeche des Spiels (800 x 500 Pixel) -->
-	<canvas id="spielfeld" width="800" height="500"></canvas>
+	<div id="spiel">
+		<!-- Zeichenflaeche des Spiels (800 x 500 Pixel) -->
+		<canvas id="spielfeld" width="800" height="500"></canvas>
+
+		<!-- Bildschirm-Steuerung fuer Smartphones/Tablets -->
+		<div id="steuerung">
+			<div id="steuerkreuz" class="touchsteuerung" aria-label="Steuerkreuz">
+				<div class="k-rauf">&#9650;</div>
+				<div class="k-links">&#9664;</div>
+				<div class="k-rechts">&#9654;</div>
+				<div class="k-runter">&#9660;</div>
+			</div>
+
+			<div id="knoepfe" class="touchsteuerung">
+				<button type="button" data-befehl="restart">Neustart</button>
+				<button type="button" data-befehl="pause">Pause</button>
+				<button type="button" data-befehl="prev1">&laquo; Level</button>
+				<button type="button" data-befehl="next1">Level &raquo;</button>
+				<button type="button" data-befehl="next" id="knopf-weiter">Weiter</button>
+			</div>
+		</div>
+	</div>
 
 	<p class="hinweis">
-		Dajmonds V0.6 &ndash; Pfeiltasten: bewegen &bull; F1: Neustart &bull;
-		F2: naechstes Level (nach Sieg) &bull; Bild&uarr;/Bild&darr;: Level waehlen &bull; Esc: Pause
+		<span class="hinweis-tastatur">
+			Dajmonds V0.6 &ndash; Pfeiltasten: bewegen &bull; F1: Neustart &bull;
+			F2: naechstes Level (nach Sieg) &bull; Bild&uarr;/Bild&darr;: Level waehlen &bull; Esc: Pause
+		</span>
+		<span class="hinweis-touch">
+			Dajmonds V0.6 &ndash; Wischen oder Steuerkreuz: bewegen (gedrueckt halten = weiterlaufen)
+			&bull; Tippen nach Sieg: naechstes Level
+		</span>
 	</p>
 
 	<!-- Level-Daten: definiert die globale Zeichenkette "b" mit allen Spielfeldern -->
@@ -61,6 +219,9 @@
 		    (Boulder-Dash-Regel); vorher ein Feld zu frueh
 		  - Randpruefung beim Abrollen, Fehlermeldung bei fehlender levels.js
 		  - Feldgroesse passt sich dem Level an, Spielfeld zentriert; Canvas skaliert per CSS
+
+		2026-10-25: Touch-Steuerung fuer Smartphones (Wischen auf dem Spielfeld,
+		  Steuerkreuz und Knoepfe; gedrueckt halten = weiterlaufen)
 	-->
 	<script>
 	'use strict';
@@ -290,29 +451,215 @@
 			case 'F2':         taste = NEXT;    break; // naechstes Level (nach Sieg)
 			case 'PageUp':     taste = NEXT1;   break; // Level vorwaerts blaettern
 			case 'PageDown':   taste = PREV1;   break; // Level rueckwaerts blaettern
-			case 'Escape':                             // Pause umschalten
-				if (showhide)
-				{
-					showhide = false;
-					paintwall = true;
-					for (let x = 0; x < xdim; x++)
-						for (let y = 0; y < ydim; y++)
-							olda[x + maxxdim * y] = -42;
-				}
-				else
-				{
-					showhide = true;
-					// Vorhang sofort zeichnen. Vorher geschah das nur nebenbei beim Neuzeichnen
-					// eines Diamanten - waren alle eingesammelt, blieb das Spielfeld sichtbar.
-					bar(0, 0, imagewidth, imageheight, 255, 255, 255);
-					graTextOut(imagewidth / 2 - 40, imageheight / 2, 24, "Pause", 0, 0, 0);
-				}
-				break;
+			case 'Escape':     pauseUmschalten(); break;
 			default:
 				return; // andere Tasten ignorieren (kein preventDefault)
 		}
 
 		evt.preventDefault(); // Standardaktion (Scrollen, F1-Hilfe ...) unterdruecken
+	}
+
+	/** Pause ein- bzw. ausschalten (Esc oder Pause-Knopf). */
+	function pauseUmschalten()
+	{
+		if (showhide)
+		{
+			showhide = false;
+			paintwall = true;
+			for (let x = 0; x < xdim; x++)
+				for (let y = 0; y < ydim; y++)
+					olda[x + maxxdim * y] = -42;
+		}
+		else
+		{
+			showhide = true;
+			setzeTouchRichtung(0);
+			// Vorhang sofort zeichnen. Vorher geschah das nur nebenbei beim Neuzeichnen
+			// eines Diamanten - waren alle eingesammelt, blieb das Spielfeld sichtbar.
+			bar(0, 0, imagewidth, imageheight, 255, 255, 255);
+			graTextOut(imagewidth / 2 - 40, imageheight / 2, 24, "Pause", 0, 0, 0);
+		}
+	}
+
+	// ---------------------------------------------------------------------
+	//  Touch-Eingabe
+	// ---------------------------------------------------------------------
+	//  Zwei Wege, die Figur zu steuern:
+	//   - Wischen auf dem Spielfeld: sobald sich der Finger WISCH_SCHWELLE Pixel
+	//     bewegt hat, geht die Figur in die ueberwiegende Richtung. Bleibt der
+	//     Finger liegen, laeuft sie weiter (wie eine gehaltene Pfeiltaste).
+	//   - Steuerkreuz: Richtung = Fingerposition relativ zur Kreuzmitte.
+	//  Beides landet in setzeTouchRichtung(), die "taste" wie die Tastatur setzt.
+
+	const WISCH_SCHWELLE      = 24;  // CSS-Pixel bis ein Wischen als Richtung zaehlt
+	const TOUCH_VERZOEGERUNG  = 250; // ms bis gehaltene Richtung zu wiederholen beginnt
+	const TOUCH_WIEDERHOLUNG  = 100; // ms zwischen zwei Schritten beim Halten
+
+	let touchRichtung = 0;       // aktuell gehaltene Richtung (0 = keine)
+	let verzoegerungTimer = 0;
+	let wiederholTimer = 0;
+
+	const kreuz = document.getElementById('steuerkreuz');
+	const kreuzFelder = {
+		[RAUF]:   kreuz.querySelector('.k-rauf'),
+		[RECHTS]: kreuz.querySelector('.k-rechts'),
+		[RUNTER]: kreuz.querySelector('.k-runter'),
+		[LINKS]:  kreuz.querySelector('.k-links')
+	};
+	const knopfWeiter = document.getElementById('knopf-weiter');
+
+	/**
+	 * Setzt die per Touch gehaltene Richtung. Der erste Schritt erfolgt sofort,
+	 * nach TOUCH_VERZOEGERUNG wird alle TOUCH_WIEDERHOLUNG ms wiederholt.
+	 * @param {number} richtung RAUF/RECHTS/RUNTER/LINKS oder 0 zum Loslassen
+	 */
+	function setzeTouchRichtung(richtung)
+	{
+		if (richtung === touchRichtung)
+			return;
+
+		clearTimeout(verzoegerungTimer);
+		clearInterval(wiederholTimer);
+		if (kreuzFelder[touchRichtung])
+			kreuzFelder[touchRichtung].classList.remove('aktiv');
+
+		touchRichtung = richtung;
+		if (richtung === 0)
+			return;
+
+		kreuzFelder[richtung].classList.add('aktiv');
+		taste = richtung;
+		verzoegerungTimer = setTimeout(() =>
+		{
+			wiederholTimer = setInterval(() => { taste = touchRichtung; }, TOUCH_WIEDERHOLUNG);
+		}, TOUCH_VERZOEGERUNG);
+	}
+
+	/** Ueberwiegende Richtung eines Vektors (Bildschirmkoordinaten, y nach unten). */
+	function richtungAus(dx, dy)
+	{
+		if (Math.abs(dx) > Math.abs(dy))
+			return dx > 0 ? RECHTS : LINKS;
+		return dy > 0 ? RUNTER : RAUF;
+	}
+
+	/** Richtung aus der Fingerposition auf dem Steuerkreuz; kleine Totzone in der Mitte. */
+	function kreuzRichtung(evt)
+	{
+		const r = kreuz.getBoundingClientRect();
+		const dx = evt.clientX - (r.left + r.width / 2);
+		const dy = evt.clientY - (r.top + r.height / 2);
+
+		if (Math.hypot(dx, dy) < r.width * 0.12)
+			return; // Totzone: bisherige Richtung beibehalten
+		setzeTouchRichtung(richtungAus(dx, dy));
+	}
+
+	// Wischen auf dem Spielfeld. Der Bezugspunkt wandert nach jeder erkannten
+	// Richtung mit, damit man ohne Absetzen die Richtung wechseln kann.
+	let wischX = 0, wischY = 0;
+	let wischAktiv = false; // Finger liegt auf dem Spielfeld
+	let gewischt = false;
+
+	function wischStart(evt)
+	{
+		canvas.setPointerCapture(evt.pointerId); // Bewegungen auch ausserhalb des Canvas erhalten
+		wischX = evt.clientX;
+		wischY = evt.clientY;
+		wischAktiv = true;
+		gewischt = false;
+		evt.preventDefault();
+	}
+
+	function wischBewegung(evt)
+	{
+		if (!wischAktiv)
+			return;
+
+		const dx = evt.clientX - wischX;
+		const dy = evt.clientY - wischY;
+		if (Math.max(Math.abs(dx), Math.abs(dy)) < WISCH_SCHWELLE)
+			return;
+
+		setzeTouchRichtung(richtungAus(dx, dy));
+		wischX = evt.clientX;
+		wischY = evt.clientY;
+		gewischt = true;
+	}
+
+	function wischEnde()
+	{
+		if (!wischAktiv)
+			return;
+		wischAktiv = false;
+		setzeTouchRichtung(0);
+
+		// Kurzes Tippen ohne Wischen: nach dem Sieg weiter, in der Pause fortsetzen.
+		if (!gewischt)
+		{
+			if (showhide)
+				pauseUmschalten();
+			else if (steperg === true)
+				taste = NEXT;
+		}
+	}
+
+	/** Knoepfe unter dem Spielfeld. */
+	function onKnopf(evt)
+	{
+		const knopf = evt.target.closest('button');
+		if (!knopf)
+			return;
+
+		switch (knopf.dataset.befehl)
+		{
+			case 'restart': taste = RESTART; break;
+			case 'next':    taste = NEXT;    break;
+			case 'next1':   taste = NEXT1;   break;
+			case 'prev1':   taste = PREV1;   break;
+			case 'pause':   pauseUmschalten(); break;
+		}
+	}
+
+	/** Schaltet die Bildschirm-Steuerung ein (Klasse "touch" am <html>-Element). */
+	function aktiviereTouch()
+	{
+		document.documentElement.classList.add('touch');
+	}
+
+	function initTouch()
+	{
+		if (window.matchMedia('(pointer: coarse)').matches)
+			aktiviereTouch();
+		// Geraete mit Maus UND Touchscreen: Steuerung beim ersten Beruehren einblenden.
+		window.addEventListener('touchstart', aktiviereTouch, { once: true, passive: true });
+
+		canvas.addEventListener('pointerdown', wischStart);
+		canvas.addEventListener('pointermove', wischBewegung);
+		canvas.addEventListener('pointerup', wischEnde);
+		canvas.addEventListener('pointercancel', wischEnde);
+
+		let kreuzAktiv = false; // Finger liegt auf dem Steuerkreuz
+		const kreuzLoslassen = () => { kreuzAktiv = false; setzeTouchRichtung(0); };
+		kreuz.addEventListener('pointerdown', (evt) =>
+		{
+			kreuz.setPointerCapture(evt.pointerId);
+			kreuzAktiv = true;
+			kreuzRichtung(evt);
+			evt.preventDefault();
+		});
+		kreuz.addEventListener('pointermove', (evt) =>
+		{
+			if (kreuzAktiv)
+				kreuzRichtung(evt);
+		});
+		kreuz.addEventListener('pointerup', kreuzLoslassen);
+		kreuz.addEventListener('pointercancel', kreuzLoslassen);
+
+		document.getElementById('knoepfe').addEventListener('click', onKnopf);
+
+		// App wechselt in den Hintergrund: gehaltene Richtung loslassen.
+		document.addEventListener('visibilitychange', () => setzeTouchRichtung(0));
 	}
 
 	// =====================================================================
@@ -865,6 +1212,9 @@
 
 		if (kill === 1)
 			killzaehler++;
+
+		// "Weiter"-Knopf leuchtet, sobald das naechste Level freigeschaltet ist.
+		knopfWeiter.classList.toggle('bereit', steperg === true && istlevel < levelzahl - 1);
 	}
 
 	// Zeitsteuerung: requestAnimationFrame liefert ein fluessiges Rendering,
@@ -911,6 +1261,7 @@
 				olda[x + maxxdim * y] = -42;
 
 		document.addEventListener('keydown', onKeyDown);
+		initTouch();
 
 		letzteZeit = performance.now();
 		requestAnimationFrame(schleife);

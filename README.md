@@ -24,6 +24,20 @@ dahinter Platz ist.
 | Bild auf / Bild ab | Level wählen |
 | Esc | Pause |
 
+### Smartphone / Tablet
+
+Auf Touch-Geräten erscheinen unter dem Spielfeld (im Querformat links und
+rechts daneben) ein Steuerkreuz und Knöpfe für Neustart, Pause, Levelwahl und
+„Weiter“.
+
+| Geste | Funktion |
+|---|---|
+| Wischen auf dem Spielfeld | bewegen / graben |
+| Finger nach dem Wischen liegen lassen | weiterlaufen |
+| Steuerkreuz (halten, ohne Absetzen umlenken) | bewegen / graben |
+| Tippen auf das Spielfeld nach dem Sieg | nächstes Level |
+| Tippen auf das Spielfeld in der Pause | weiterspielen |
+
 ## Eigene Level
 
 Die Level stehen in `levels.js` als Zeichenkette. Jedes Level beginnt mit
