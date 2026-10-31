@@ -55,6 +55,9 @@ Die Level stehen in `levels.js` als Zeichenkette. Jedes Level beginnt mit
 
 Die Liste endet mit `END`. Das Spielfeld ist auf 21 × 12 Felder begrenzt.
 
+Die mitgelieferten 34 Level sind nach Schwierigkeit sortiert (leicht → schwer);
+jedes ist mit einem Löser, der die Spielphysik nachbildet, auf Lösbarkeit geprüft.
+
 ## Dateien
 
 - `diamonds.html` – Spiel (Logik und Darstellung)
